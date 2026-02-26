@@ -1,0 +1,15 @@
+
+生成便携程序（打包教程）
+
+1、打开命令行： 在代码所在的文件夹（D:\GZZ\kaoqin）空白处，按住 Shift 键 + 鼠标右键，选择“在此处打开 PowerShell 窗口”或“CMD”。
+
+2、安装打包工具（如果您还没装过）： 输入以下命令并回车：
+使用国内镜像源 + 忽略缓存（最推荐）
+pip install pyinstaller -i https://pypi.tuna.tsinghua.edu.cn/simple --no-cache-dir --user
+
+3、开始打包： 输入以下命令（确保您的脚本文件名叫 auto_attendance.py，如果不是请修改命令中的名字）：
+方法一：使用完整路径运行（最稳妥）
+C:\Users\96232\AppData\Roaming\Python\Python313\Scripts\pyinstaller.exe -F --icon=NONE attendance.py
+或
+方法二：通过 Python 模块调用（最简单）
+python -m PyInstaller -F --icon=NONE attendance.py
