@@ -177,6 +177,12 @@ def run_processing(source_file, prev_month_file, log_func):
     df_stats['match_name'] = df_stats['姓名'].astype(str).str.replace(' ', '').str.strip()
 
     df_daily_source = pd.read_excel(source_file, sheet_name='月度汇总', header=3)
+    
+    # 【锁定日历映射齿轮】
+    date_cols_in_dingding = list(df_daily_source.columns[-len(date_list):])
+    dingding_date_col_map = {dt.strftime('%Y-%m-%d'): col_name for dt, col_name in zip(date_list, date_cols_in_dingding)}
+    log("🔒 [Data Lock] 已成功咬合钉钉底层日历齿轮，防止错位偏移。")
+
     df_daily_source.rename(columns={df_daily_source.columns[0]: '姓名'}, inplace=True)
     df_daily_source['match_name'] = df_daily_source['姓名'].astype(str).str.replace(' ', '').str.strip()
 
@@ -272,7 +278,7 @@ def run_processing(source_file, prev_month_file, log_func):
         if is_hq:
             log(f"  ├─ 阵营探针：归属 [{dept}] -> 激活【本部双休与标准日历引擎】")
         else:
-            log(f"  ├─ 阵营探针：归属 [{dept}] -> 激活【非本部大水池统筹结算引擎】")
+            log(f"  ├─ 阵营探针：归属 [{dept}] -> 激活【非本部大一统工作日引擎】")
         
         user_shift_type = "default"
         if any(k in dept for k in SHIFT_24_48): 
@@ -320,6 +326,7 @@ def run_processing(source_file, prev_month_file, log_func):
         override_status = {}
         edge_compensated = False 
         
+        # ================= 【绝对锁定保留 V41 稳定的时序排班护盾】 =================
         if user_shift_type == "24_48":
             log("  ├─ 时序分析：特征匹配 -> 挂载【上24休48】滚动扫描窗口")
             for i in range(len(date_keys) - 1):
@@ -374,17 +381,24 @@ def run_processing(source_file, prev_month_file, log_func):
 
         if edge_compensated:
             log("  ├─ 边缘推理：触发！侦测到周期跨天截断 -> 已执行盲区智能洗白")
+        # ====================================================================
 
+        # 视觉财务级计数器初始化
+        tracked_comp = 0.0
+        tracked_personal = 0.0
+        tracked_sick = 0.0
+        tracked_unpunched = 0.0
+        tracked_absent = 0.0
+        tracked_late = 0.0
+        tracked_holiday_rest = 0.0 # 专门记录核心节假日的 ※
+        
+        actual_attendance_days = 0.0
         local_prov_in = 0
         local_prov_out = 0
         hq_overtime_calc = 0.0
-        actual_rest_days = 0 
-        actual_attendance_days = 0 
-        no_punch_count = 0 
         
         triggered_late = 0
         triggered_weekend_half = 0
-        triggered_workday_half_absent = 0  
 
         for col, full_date_str in date_col_map.items():
             short_date = full_date_str[5:]
@@ -396,17 +410,14 @@ def run_processing(source_file, prev_month_file, log_func):
             
             day_type = 'workday'
             if is_hq:
-                if full_date_str in holiday_rest_days: 
-                    day_type = 'holiday'
-                elif full_date_str in work_on_holidays: 
-                    day_type = 'workday'
-                elif is_weekend: 
-                    day_type = 'rest'
+                if full_date_str in holiday_rest_days: day_type = 'holiday'
+                elif full_date_str in work_on_holidays: day_type = 'workday'
+                elif is_weekend: day_type = 'rest'
             else:
                 if full_date_str in legal_holidays: 
                     day_type = 'holiday'
-                elif is_weekend: 
-                    day_type = 'rest'
+                else: 
+                    day_type = 'workday'
 
             found_locs = []
             has_morning_punch = False
@@ -418,73 +429,39 @@ def run_processing(source_file, prev_month_file, log_func):
             has_field_work = '外勤' in day_results
             
             is_emc01 = any(jk.lower() in day_addrs.lower() for jk in JINAN_KEYWORDS if 'emc' in jk.lower() or '公司' in jk or '本部' in jk)
-            if is_hq and is_emc01: 
-                has_field_work = False
+            if is_hq and is_emc01: has_field_work = False
 
             for _, rec in daily_recs.iterrows():
                 addr = str(rec['打卡地址']) + str(rec['打卡备注'])
                 time_match = re.search(r'(\d{1,2}):\d{2}', str(rec['打卡时间']))
                 if time_match:
                     hr = int(time_match.group(1))
-                    if hr < 12: 
-                        has_morning_punch = True
-                    if hr >= 12: 
-                        has_afternoon_punch = True
-                    if hr >= 21: 
-                        has_late_night_punch = True
+                    if hr < 12: has_morning_punch = True
+                    if hr >= 12: has_afternoon_punch = True
+                    if hr >= 21: has_late_night_punch = True
 
                 if not (is_hq and is_emc01):
                     curr = None
                     for kw, sym in PROJECT_MAPPING.items():
-                        if kw in addr: 
-                            curr = sym
-                            break
+                        if kw in addr: curr = sym; break
                     if not curr:
                         for kw, sym in CITY_ABBREVIATIONS.items():
-                            if kw in addr: 
-                                curr = sym
-                                break
+                            if kw in addr: curr = sym; break
                     if not curr:
                         for city in SHANDONG_KEYWORDS + LOC_PROVINCE_OUT:
-                            if city in addr: 
-                                curr = city
-                                break
-                    if curr and curr not in found_locs: 
-                        found_locs.append(curr)
+                            if city in addr: curr = city; break
+                    if curr and curr not in found_locs: found_locs.append(curr)
 
-            # ================= 降维打击装甲 =================
+            # ================= 🎯 绝对定位读取钉钉状态 =================
             val = None
-            search_keys = [day_str, int(day_str)]
-            try: search_keys.append(float(day_str))
-            except: pass
-            search_keys.append(f"{day_str}.0")
-            
-            for src in [stats_data, daily_data]:
-                for key in search_keys:
-                    if key in src.index:
-                        val = src[key]
-                        break
-                if val is not None:
-                    break
-                    
-            if val is None:
-                for src in [stats_data, daily_data]:
-                    for k_idx, v_val in src.items():
-                        k_str = str(k_idx).strip()
-                        if k_str == day_str or k_str == f"{day_str}.0":
-                            val = v_val
-                            break
-                        if hasattr(k_idx, 'day') and str(k_idx.day) == day_str:
-                            val = v_val
-                            break
-                    if val is not None:
-                        break
+            mapped_col = dingding_date_col_map.get(full_date_str)
+            if mapped_col and mapped_col in daily_data.index:
+                val = daily_data[mapped_col]
 
             if val is None or pd.isna(val) or str(val).strip() in ['nan', 'None', '']:
                 status_raw = "nan"
             else:
                 status_raw = str(val).strip()
-            # ================================================
 
             force_normal = False
             force_rest = False
@@ -500,19 +477,14 @@ def run_processing(source_file, prev_month_file, log_func):
             if not found_locs and not (is_hq and is_emc01):
                 if not daily_recs.empty or '正常' in status_raw or force_normal:
                     for kw, sym in PROJECT_MAPPING.items():
-                        if kw in dept: 
-                            found_locs.append(sym)
-                            break
+                        if kw in dept: found_locs.append(sym); break
                     if not found_locs:
                         for kw, sym in CITY_ABBREVIATIONS.items():
-                            if kw in dept: 
-                                found_locs.append(sym)
-                                break
+                            if kw in dept: found_locs.append(sym); break
                     if not found_locs:
                         for city in SHANDONG_KEYWORDS + LOC_PROVINCE_OUT:
                             if city in dept and city not in ['公司', '本部', '山东', '省外']: 
-                                found_locs.append(city)
-                                break
+                                found_locs.append(city); break
                     if not found_locs and has_field_work: 
                         found_locs.append("外勤")
 
@@ -523,46 +495,39 @@ def run_processing(source_file, prev_month_file, log_func):
                 is_out = any(k in eval_string for k in LOC_PROVINCE_OUT)
 
                 if is_hq:
-                    if is_jinan: 
-                        pass 
-                    elif is_sd: 
-                        local_prov_in += 1 
-                    elif is_out or has_field_work: 
-                        local_prov_out += 1 
+                    if is_jinan: pass 
+                    elif is_sd: local_prov_in += 1 
+                    elif is_out or has_field_work: local_prov_out += 1 
                 else:
-                    if is_sd or is_jinan: 
-                        local_prov_in += 1 
-                    elif is_out or has_field_work: 
-                        local_prov_out += 1 
+                    if is_sd or is_jinan: local_prov_in += 1 
+                    elif is_out or has_field_work: local_prov_out += 1 
                     else:
-                        if any(k in dept for k in OUTSIDE_DEPT_KEYWORDS): 
-                            local_prov_out += 1
-                        else: 
-                            local_prov_in += 1
+                        if any(k in dept for k in OUTSIDE_DEPT_KEYWORDS): local_prov_out += 1
+                        else: local_prov_in += 1
 
             if is_hq:
                 found_locs = [loc for loc in found_locs if loc not in JINAN_KEYWORDS]
 
             loc_str = '/'.join(found_locs) if found_locs else '√'
+            base_text = loc_str
 
-            # ================= V40.0 双轨制引擎：本部专属军规 =================
+            # ================= 核心判定漏斗 =================
             if is_hq:
+                # 【公司本部规则】
                 if force_normal:
                     base_text = loc_str
                 elif force_rest:
                     base_text = '○'
                 elif day_type in ['holiday', 'rest']:
                     if daily_recs.empty and not any(k in status_raw for k in ['加班', '正常']):
-                        base_text = '※' if day_type == 'holiday' else '○'
+                        if '调休' in status_raw: base_text = '调休'
+                        elif any(k in status_raw for k in ['假', '年']): base_text = '假'
+                        else: base_text = '※' if day_type == 'holiday' else '○'
                     else:
                         if has_morning_punch or has_afternoon_punch:
                             if has_morning_punch and has_afternoon_punch:
-                                if has_late_night_punch:
-                                    hq_overtime_calc += 1.5
-                                    base_text = '+'
-                                else:
-                                    hq_overtime_calc += 1.0
-                                    base_text = '+'
+                                hq_overtime_calc += 1.5 if has_late_night_punch else 1.0
+                                base_text = '+'
                             elif has_morning_punch and not has_afternoon_punch:
                                 hq_overtime_calc += 0.5
                                 triggered_weekend_half += 1
@@ -570,7 +535,7 @@ def run_processing(source_file, prev_month_file, log_func):
                             elif not has_morning_punch and has_afternoon_punch:
                                 if has_late_night_punch:
                                     hq_overtime_calc += 1.0
-                                    base_text = '+'  # 加班满1天，纯净标记
+                                    base_text = '+'  
                                 else:
                                     hq_overtime_calc += 0.5
                                     triggered_weekend_half += 1
@@ -580,211 +545,248 @@ def run_processing(source_file, prev_month_file, log_func):
                         else:
                             base_text = '※' if day_type == 'holiday' else '○'
                 elif day_type == 'workday':
-                    if '旷工' in status_raw and daily_recs.empty and not any(k in status_raw for k in ['假', '调休', '出差', '年']):
-                         base_text = '迟' if '旷工迟到' in status_raw else '×'
-                    elif any(k in status_raw for k in ['假', '调休', '出差', '年']):
-                        if '0.5' in status_raw or '半天' in status_raw:
-                            is_morning_leave = bool(re.search(r'(0[0-9]|1[0-1]):\d{2}', status_raw))
-                            if '调休' in status_raw: 
-                                base_text = f"调休/{loc_str}" if is_morning_leave else f"{loc_str}/调休"
-                            elif '出差' in status_raw:
-                                base_text = f"出差/{loc_str}" if is_morning_leave else f"{loc_str}/出差"
-                            else: 
-                                base_text = f"请假/{loc_str}" if is_morning_leave else f"{loc_str}/请假"
+                    # 【🎯 V55.0 本部同步修复：斩断冗余，直取审批与迟到】
+                    if any(k in status_raw for k in ['假', '调休', '出差', '年']):
+                        is_half = '0.5' in status_raw or '半天' in status_raw
+                        is_morning_leave = bool(re.search(r'(0[0-9]|1[0-1]):\d{2}', status_raw))
+                        leave_text = '调休' if '调休' in status_raw else ('出差' if '出差' in status_raw else '假')
+                        
+                        if is_half:
+                            if daily_recs.empty:
+                                other_half = '未打卡'
+                            else:
+                                other_half = loc_str if (has_afternoon_punch if is_morning_leave else has_morning_punch) else '未打卡'
+                            
+                            if is_morning_leave:
+                                base_text = f"{leave_text}/{other_half}"
+                                if has_afternoon_punch and has_late_night_punch:
+                                    hq_overtime_calc += 0.5; base_text += '/+'
+                            else:
+                                base_text = f"{other_half}/{leave_text}"
                         else:
-                            if '调休' in status_raw: base_text = '调休'
-                            elif '出差' in status_raw: base_text = '出差'
-                            else: base_text = '假'
-                    else: 
-                        if daily_recs.empty:
-                            base_text = '未打卡'
-                            no_punch_count += 1.0
-                        else:
-                            if has_morning_punch and has_afternoon_punch:
-                                base_text = loc_str
-                                if has_late_night_punch:
-                                    hq_overtime_calc += 0.5
-                                    triggered_late += 1
-                                    base_text = f'{loc_str}/+'
-                            elif has_morning_punch and not has_afternoon_punch:
-                                base_text = f'{loc_str}/未打卡'
-                                no_punch_count += 0.5
-                                triggered_workday_half_absent += 1
-                            elif not has_morning_punch and has_afternoon_punch:
-                                base_text = f'未打卡/{loc_str}'
-                                no_punch_count += 0.5
-                                triggered_workday_half_absent += 1
-                                if has_late_night_punch:
-                                    hq_overtime_calc += 0.5
-                                    triggered_late += 1
-                                    base_text = f'未打卡/{loc_str}/+'
+                            base_text = leave_text
+                            
+                    elif '旷工' in status_raw:
+                        base_text = '迟' if '旷工迟到' in status_raw else '×'
+                    elif '迟到' in status_raw:
+                        base_text = '迟'
+                        
+                    elif daily_recs.empty:
+                        base_text = '未打卡'
+                    else:
+                        if has_morning_punch and has_afternoon_punch:
+                            base_text = loc_str
+                            if has_late_night_punch:
+                                hq_overtime_calc += 0.5
+                                triggered_late += 1
+                                base_text = f'{loc_str}/+'
+                        elif has_morning_punch and not has_afternoon_punch:
+                            base_text = f'{loc_str}/未打卡'
+                        elif not has_morning_punch and has_afternoon_punch:
+                            base_text = f'未打卡/{loc_str}'
+                            if has_late_night_punch:
+                                hq_overtime_calc += 0.5
+                                triggered_late += 1
+                                base_text = f'未打卡/{loc_str}/+'
 
-                safe_write(ws, row, col, base_text)
-
-            # ================= V40.0 双轨制引擎：非本部经典逻辑 =================
             else:
-                base_text = loc_str
-                if force_normal: 
-                    pass 
+                # ==============================================================
+                # 【🎯 V55.0 非本部严密漏斗：绝对无情裁决】
+                
+                # 第 1 关：OA 审批绝对优先
+                if any(k in status_raw for k in ['假', '调休', '出差', '年']):
+                    is_half = '0.5' in status_raw or '半天' in status_raw
+                    is_morning_leave = bool(re.search(r'(0[0-9]|1[0-1]):\d{2}', status_raw))
+                    leave_text = '调休' if '调休' in status_raw else ('出差' if '出差' in status_raw else '假')
+                    
+                    if is_half:
+                        if daily_recs.empty:
+                            other_half = '未打卡'
+                        else:
+                            other_half = loc_str if (has_afternoon_punch if is_morning_leave else has_morning_punch) else '未打卡'
+                            
+                        if is_morning_leave:
+                            base_text = f"{leave_text}/{other_half}"
+                        else:
+                            base_text = f"{other_half}/{leave_text}"
+                    else:
+                        base_text = leave_text
+                
+                # 第 2 关：【核心修复】迟到/旷工绝对权威，不进行任何废话二次验证！
+                elif '旷工' in status_raw:
+                    base_text = '迟' if '旷工迟到' in status_raw else '×'
+                elif '迟到' in status_raw:
+                    base_text = '迟'
+
+                # 第 3 关：复杂排班护盾
+                elif force_normal:
+                    base_text = loc_str
                 elif force_rest:
                     base_text = '调休'
-                    actual_rest_days += 1
-                elif day_type in ['holiday', 'rest'] and daily_recs.empty and '正常' not in status_raw and '加班' not in status_raw:
-                    if day_type == 'holiday': 
-                        base_text = '※'
-                    else: 
-                        base_text = '调休'
-                    actual_rest_days += 1
-                elif '假' in status_raw or '调休' in status_raw:
-                    if '0.5' not in status_raw:
-                        actual_rest_days += 1
-                    else:
-                        actual_rest_days += 0.5
-                        
-                    if '0.5' in status_raw or '半天' in status_raw:
-                        is_morning_leave = bool(re.search(r'(0[0-9]|1[0-1]):\d{2}', status_raw))
-                        if '调休' in status_raw: 
-                            if is_morning_leave:
-                                base_text = f"调休/{loc_str}"
-                            else:
-                                base_text = f"{loc_str}/调休"
-                        else: 
-                            if is_morning_leave:
-                                base_text = f"请假/{loc_str}"
-                            else:
-                                base_text = f"{loc_str}/请假"
-                    else: 
-                        if '调休' in status_raw:
-                            base_text = '调休'
-                        else:
-                            base_text = '假'
-                elif daily_recs.empty and not any(k in status_raw for k in ['假', '调休', '出差', '正常']):
-                    base_text = '调休'
-                    actual_rest_days += 1
-                elif '旷工' in status_raw:
-                    if '旷工迟到' in status_raw:
-                        base_text = '迟'
-                    else:
-                        base_text = '×'
-                elif '迟到' in status_raw and day_type == 'workday':
-                    if not daily_recs[daily_recs['打卡结果'] == '正常'].empty and '迟到' not in str(daily_recs['打卡结果'].values): 
-                        pass 
-                    else: 
-                        base_text = '迟'
 
-                safe_write(ws, row, col, base_text)
-                
-            # ================= V40.0 考勤天数精准核算 (统一收口，防重复累加) =================
+                # 以下处理没有任何保护伞的情况：
+                elif daily_recs.empty:
+                    if day_type == 'holiday':
+                        base_text = '※' 
+                    elif '休息' in status_raw or '休' in status_raw:
+                        base_text = '调休' 
+                    else:
+                        base_text = '未打卡' 
+
+                else:
+                    if day_type == 'holiday':
+                        base_text = loc_str 
+                    elif '休息' in status_raw or '休' in status_raw:
+                        base_text = loc_str 
+                    else:
+                        if has_morning_punch and has_afternoon_punch:
+                            base_text = loc_str
+                        elif has_morning_punch and not has_afternoon_punch:
+                            base_text = f"{loc_str}/未打卡"
+                        elif not has_morning_punch and has_afternoon_punch:
+                            base_text = f"未打卡/{loc_str}"
+                        else:
+                            base_text = loc_str
+                # ==============================================================
+
+            # 最终盖印
+            safe_write(ws, row, col, base_text)
+            
+            # ================= 财务级视觉清点器 =================
+            parts = str(base_text).split('/')
+            val_p = 0.5 if len(parts) > 1 else 1.0
+            
+            for p in parts:
+                p = p.strip()
+                if p == '调休':
+                    tracked_comp += val_p
+                elif p in ['请假', '假', '事假', '年']:
+                    if '病假' in status_raw: tracked_sick += val_p
+                    else: tracked_personal += val_p
+                elif p == '病假':
+                    tracked_sick += val_p
+                elif p == '未打卡':
+                    tracked_unpunched += val_p
+                elif p == '×':
+                    tracked_absent += val_p
+                elif p == '迟':
+                    tracked_late += 1.0 # 迟到按频次
+                elif p == '※':
+                    # 记录实际享受的核心节假日天数
+                    if not is_hq: tracked_holiday_rest += val_p
+            # =======================================================================
+            
+            # 出勤天数精准核算
             if is_hq:
                 if day_type == 'workday':
-                    if '出差' in status_raw:
-                        actual_attendance_days += 1.0
+                    if '出差' in status_raw: actual_attendance_days += 1.0
                     elif any(k in status_raw for k in ['假', '调休', '年']):
-                        if '0.5' in status_raw or '半天' in status_raw:
-                            actual_attendance_days += 0.5
-                    elif base_text == '×':
-                        pass 
-                    else:
-                        actual_attendance_days += 1.0
+                        if '0.5' in status_raw or '半天' in status_raw: actual_attendance_days += 0.5
+                    elif base_text == '×': pass 
+                    else: actual_attendance_days += 1.0
                 else:
-                    if '+' in base_text:
-                        actual_attendance_days += 1.0
+                    if '+' in base_text: actual_attendance_days += 1.0
             else:
-                if base_text in ['+/○', '○/+', '+/※', '※/+'] or any(k in base_text for k in ['调休/', '/调休', '请假/', '/请假', '未打卡/', '/未打卡']): 
+                if base_text in ['○', '※', '×', '假', '调休', '病假', '年', '未打卡']:
+                    pass 
+                elif any(k in base_text for k in ['调休/', '/调休', '请假/', '/请假', '未打卡/', '/未打卡', '+/○', '○/+', '+/※', '※/+']):
                     actual_attendance_days += 0.5
-                elif any(char in base_text for char in ['√', '迟', '+']) or (base_text not in ['○', '※', '×', '假', '调休', '病假', '年', '未打卡']):
-                    if '0.5' in status_raw or '半天' in status_raw: 
-                        actual_attendance_days += 0.5
-                    else: 
-                        actual_attendance_days += 1
-            # ==================================================================================
+                else:
+                    actual_attendance_days += 1.0
 
-        if triggered_late > 0:
-            log(f"  ├─ 异常嗅探：判定 {triggered_late} 次工作日晚加班 (>21:00) -> 盖章(√/+)")
-        if triggered_weekend_half > 0:
-            log(f"  ├─ 异常嗅探：判定 {triggered_weekend_half} 次非工作日半天加班 -> 盖章(+/○)")
-        if triggered_workday_half_absent > 0:
-            log(f"  ├─ 漏卡雷达：抓取到 {triggered_workday_half_absent} 次工作日单卡 -> 客观盖章(未打卡)并计入统计")
-        if local_prov_out > 0:
-            log(f"  ├─ GPS 巡检：抓取到省外/外勤定位 -> 累计省外天数 ({local_prov_out}天)")
+        if triggered_late > 0: log(f"  ├─ 异常嗅探：判定 {triggered_late} 次工作日晚加班 (>21:00) -> 盖章(√/+)")
+        if triggered_weekend_half > 0: log(f"  ├─ 异常嗅探：判定 {triggered_weekend_half} 次非工作日半天加班 -> 盖章(+/○)")
+        if local_prov_out > 0: log(f"  ├─ GPS 巡检：抓取到省外/外勤定位 -> 累计省外天数 ({local_prov_out}天)")
 
-        # ================= 汇总数据计算模块 =================
+        # ================= 汇总结算模块 =================
         def get_stat_val(col_name):
             val = None
             for src in [stats_data, daily_data]:
                 if col_name in src.index: return src[col_name]
             return 0
             
-        dt_comp_leave = parse_number(get_stat_val('调休(天)'))
-        dt_personal_leave = parse_number(get_stat_val('事假(天)'))
-        dt_sick_leave = parse_number(get_stat_val('病假(天)'))
+        # 【全面应用】使用肉眼清点的纯净数据！
+        dt_comp_leave = tracked_comp
+        dt_personal_leave = tracked_personal
+        dt_sick_leave = tracked_sick
+        final_unpunched = tracked_unpunched
+        final_absent = tracked_absent
+        
+        # 迟到兜底 (防错，取钉钉自带与视觉清点的最大值)
+        dt_late = parse_number(get_stat_val('迟到次数')) + parse_number(get_stat_val('旷工迟到次数'))
+        final_late = max(dt_late, tracked_late)
+        
+        # 加班费由于需按小时阶梯兑算天数，采用结合法
         dt_ot_dingding = sum(parse_number(get_stat_val(k)) for k in ['工作日加班', '休息日加班', '节假日加班'])
         
         old_banked = old_banked_data.get(name, 0.0)
+        final_overtime = 0.0
         
         if is_hq:
             written_comp_leave = dt_comp_leave
             written_personal_leave = dt_personal_leave
-            total_earned_ot = max(dt_ot_dingding, hq_overtime_calc)
-            available_bank = old_banked + total_earned_ot
+            final_overtime = max(dt_ot_dingding, hq_overtime_calc)
+            available_bank = old_banked + final_overtime
             
             if dt_comp_leave <= available_bank:
-                written_comp_leave = dt_comp_leave
                 new_banked = available_bank - dt_comp_leave
-                calc_overtime = 0.0
-                log(f"  └─ 资金池：扣除审批调休({dt_comp_leave}) <= 可用池({available_bank}) -> 结余存班({new_banked})")
+                log(f"  └─ 资金池：扣除实际清点调休({dt_comp_leave}) <= 可用池({available_bank}) -> 结余存班({new_banked})")
             else:
-                written_comp_leave = available_bank 
                 written_personal_leave = dt_personal_leave + (dt_comp_leave - available_bank) 
                 new_banked = 0.0
-                calc_overtime = 0.0
-                log(f"  └─ 资金池：扣除审批调休({dt_comp_leave}) > 可用池({available_bank}) -> 透支! 强制转事假({written_personal_leave - dt_personal_leave})")
+                log(f"  └─ 资金池：扣除实际清点调休({dt_comp_leave}) > 可用池({available_bank}) -> 透支! 强制转事假")
         else:
+            # 【🎯 终极数学模型】：非本部财务资金池流转
             n_holidays = sum(1 for dt_str in date_col_map.values() if dt_str in legal_holidays)
             dynamic_quota = n_holidays + REST_QUOTA
             
-            if old_banked + dynamic_quota <= actual_rest_days:
-                written_comp_leave = old_banked + dynamic_quota
-                written_personal_leave = dt_personal_leave + (actual_rest_days - old_banked - dynamic_quota)
+            # 日历上的调休印章(自己额度) + 日历上的※印章(法定假)
+            total_rest_taken = dt_comp_leave + tracked_holiday_rest
+            
+            # 无论怎么流转，写在表上的调休数，必须 100% 等于日历里肉眼可见的调休印章数！
+            written_comp_leave = dt_comp_leave 
+            
+            if old_banked + dynamic_quota < total_rest_taken:
+                # 假请超了
+                overdraft = total_rest_taken - old_banked - dynamic_quota
+                written_personal_leave = dt_personal_leave + overdraft
                 new_banked = 0.0
                 calc_overtime = 0.0
-                log(f"  └─ 资金池：[原存班({old_banked})+额度({dynamic_quota})] 无法覆盖总休息({actual_rest_days}) -> 转事假({written_personal_leave - dt_personal_leave})")
+                log(f"  └─ 资金池：[原存班({old_banked})+额度({dynamic_quota})] 无法覆盖总休息({total_rest_taken}) -> 结余不足,超额转事假")
             else:
-                if dynamic_quota >= actual_rest_days:
-                    calc_overtime = dynamic_quota - actual_rest_days
-                    new_banked = old_banked + calc_overtime - n_holidays
-                    written_comp_leave = actual_rest_days
-                    written_personal_leave = dt_personal_leave
-                    log(f"  └─ 资金池：额度({dynamic_quota})充足 -> 扣减休息后转加班({calc_overtime}), 新存班({new_banked})")
-                else:
-                    written_personal_leave = dt_personal_leave
-                    calc_overtime = 0.0
-                    new_banked = old_banked + dynamic_quota - actual_rest_days - n_holidays
-                    written_comp_leave = actual_rest_days
-                    log(f"  └─ 资金池：额度不足, 动用原存班补贴 -> 结转新存班({new_banked})")
+                # 有剩余额度 -> 算加班
+                calc_overtime = dynamic_quota - total_rest_taken
+                
+                # 核心铁律：核心节假日(※)来上班，算作加班，但绝对不计入存班！
+                # 他因为上班而没休的核心假天数 = 总核心假 - 实际休的核心假(※个数)
+                core_worked_days = n_holidays - tracked_holiday_rest
+                
+                # 真正能加进存班的 = 总加班天数 - 不给存班的核心假上班天数
+                added_to_bank = max(0.0, calc_overtime - core_worked_days)
+                
+                new_banked = old_banked + added_to_bank
+                written_personal_leave = dt_personal_leave
+                log(f"  └─ 资金池：剩余额度转加班({calc_overtime}) -> 剥离核心假上班后({added_to_bank})计入新存班({new_banked})")
 
-            if new_banked < 0:
-                new_banked = 0.0
+            final_overtime = dt_ot_dingding + calc_overtime
 
-        late_count = parse_number(get_stat_val('迟到次数')) + parse_number(get_stat_val('旷工迟到次数'))
-
+        # 数据写入
         if '存班' in stat_col_map: safe_write(ws, row, stat_col_map['存班'], new_banked if new_banked != 0 else None)
         if '调休' in stat_col_map: safe_write(ws, row, stat_col_map['调休'], written_comp_leave if written_comp_leave > 0 else None)
         if '请假' in stat_col_map: safe_write(ws, row, stat_col_map['请假'], written_personal_leave if written_personal_leave > 0 else None)
         if '病假' in stat_col_map: safe_write(ws, row, stat_col_map['病假'], dt_sick_leave if dt_sick_leave > 0 else None)
-        if '加班' in stat_col_map: 
-            final_ot_to_write = max(dt_ot_dingding, hq_overtime_calc) if is_hq else (dt_ot_dingding + calc_overtime)
-            safe_write(ws, row, stat_col_map['加班'], final_ot_to_write if final_ot_to_write > 0 else None)
-        if '迟到' in stat_col_map: safe_write(ws, row, stat_col_map['迟到'], late_count if late_count > 0 else None)
+        if '加班' in stat_col_map: safe_write(ws, row, stat_col_map['加班'], final_overtime if final_overtime > 0 else None)
+        if '迟到' in stat_col_map: safe_write(ws, row, stat_col_map['迟到'], final_late if final_late > 0 else None)
         if '出勤日' in stat_col_map: safe_write(ws, row, stat_col_map['出勤日'], actual_attendance_days if actual_attendance_days > 0 else None)
-        if '未打卡' in stat_col_map: safe_write(ws, row, stat_col_map['未打卡'], no_punch_count if no_punch_count > 0 else None)
+        if '未打卡' in stat_col_map: safe_write(ws, row, stat_col_map['未打卡'], final_unpunched if final_unpunched > 0 else None)
+        if '旷工' in stat_col_map: safe_write(ws, row, stat_col_map['旷工'], final_absent if final_absent > 0 else None)
         if '省内' in stat_col_map: safe_write(ws, row, stat_col_map['省内'], local_prov_in if local_prov_in > 0 else None)
         if '省外' in stat_col_map: safe_write(ws, row, stat_col_map['省外'], local_prov_out if local_prov_out > 0 else None)
         if '工地天数' in stat_col_map:
             if any(k in dept for k in SITE_DAYS_DEPT_KEYWORDS): safe_write(ws, row, stat_col_map['工地天数'], local_prov_in + local_prov_out)
             else: safe_write(ws, row, stat_col_map['工地天数'], None) 
 
-    # ================= 【新增引擎】数据底稿收口：空值填零与合计结算 =================
+    # ================= 财务底稿收口：空值填零与合计结算 =================
     log("🧮 [Data Aggregation] 正在执行底稿收口：空值填零与全列汇总结算...")
     sum_row = None
     for r in range(ws.max_row, 0, -1):
@@ -802,7 +804,6 @@ def run_processing(source_file, prev_month_file, log_func):
                 if isinstance(cell, MergedCell):
                     continue
                     
-                # 空值或无效值强行填 0
                 if cell.value is None or str(cell.value).strip() == '' or str(cell.value).strip().lower() == 'nan':
                     cell.value = 0
                     val_to_add = 0.0
@@ -814,12 +815,10 @@ def run_processing(source_file, prev_month_file, log_func):
                         
                 col_sum += val_to_add
                 
-            # 将该列总和填入合计行
             sum_cell = ws.cell(row=sum_row, column=col_idx)
             if not isinstance(sum_cell, MergedCell):
                 sum_cell.value = int(col_sum) if col_sum.is_integer() else round(col_sum, 2)
         log("  ├─ 账本核对：所有计数列空值已补零，【合计】行数据精准落盘")
-    # =================================================================================
 
     log("-" * 55)
     log("💾 [File I/O] 正在将多维矩阵数据安全落盘至 Excel...")
@@ -897,7 +896,7 @@ class DocWindow(tk.Toplevel):
 class AttendanceApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("全自动考勤计算系统 V1.41")
+        self.title("全自动考勤计算系统 V55.0 (绝对无情裁决版)")
         self.geometry("550x540")
         self.config(padx=20, pady=20)
         self.prev_month_file = None
